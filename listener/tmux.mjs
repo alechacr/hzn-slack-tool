@@ -38,10 +38,18 @@ export function kill(target) {
   return true;
 }
 
+const SCROLLBACK_LINES = 4000;  // captures history+visible so the user's anchor
+                                // line stays findable across long replies that
+                                // overflow the visible pane (e.g. /investigate
+                                // with many tool calls).
+
 // -e preserves ANSI escapes — extractReply uses them to detect italic-mode
 // thinking lines before stripping for display.
+// -S -N includes the last N lines of scrollback ahead of the visible pane;
+// without this, long pi answers push the user's anchor off-screen and
+// extractReply returns null forever.
 function captureVisible(target) {
-  const r = tmux(["capture-pane", "-t", target, "-p", "-e"]);
+  const r = tmux(["capture-pane", "-t", target, "-p", "-e", "-S", `-${SCROLLBACK_LINES}`]);
   if (r.status !== 0) return [];
   return r.stdout.replace(/\n$/, "").split("\n");
 }
