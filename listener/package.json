@@ -1,0 +1,13 @@
+{
+  "name": "hzn-slack-listener",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@slack/bolt": "^4.4.0"
+  }
+}

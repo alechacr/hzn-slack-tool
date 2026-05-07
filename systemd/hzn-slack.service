@@ -1,0 +1,17 @@
+[Unit]
+Description=hzn-slack listener (Slack <-> pi bridge)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@TOOL_DIR@/listener
+ExecStart=/usr/bin/env node @TOOL_DIR@/listener/index.mjs
+EnvironmentFile=-/etc/profile.d/hzn-dev-env.sh
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
