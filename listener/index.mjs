@@ -22,17 +22,43 @@ const app = new App({
   logLevel: LogLevel.INFO,
 });
 
-// Slack's chat.update text limit is 3000 chars. Past that it returns
-// msg_too_long. The clamp returns the trailing portion (most recent state
-// is what the user wants to see) with a header noting the truncation; the
-// header counts against the budget so the total stays under the limit.
+// Slack's chat.update / chat.postMessage text limit is 3000 chars; past that
+// the API returns msg_too_long. We use two strategies:
+//   - Streaming edits (placeholder updates as pi works): clamp to last N
+//     chars. Only one message is visible while streaming, so trailing slice
+//     is fine — user sees the most recent state.
+//   - Final reply: split into multiple thread messages so nothing is lost.
 const SLACK_TEXT_LIMIT = 2900;
+const CHUNK_TARGET = 2700;  // leaves headroom inside the per-message limit
+
 function clampForSlack(text) {
   if (!text) return text;
   if (text.length <= SLACK_TEXT_LIMIT) return text;
-  const header = `_(truncated; full reply ${text.length} chars — \`tmux attach\` on the VM)_\n\n`;
-  const bodyRoom = SLACK_TEXT_LIMIT - header.length;
-  return header + text.slice(-bodyRoom);
+  const header = `_(streaming — full reply at end of thread)_\n\n`;
+  return header + text.slice(-(SLACK_TEXT_LIMIT - header.length));
+}
+
+// Split into chunks that fit Slack's per-message limit, breaking on paragraph
+// boundaries when possible to avoid mid-sentence cuts. Single paragraphs that
+// exceed the limit get hard-split.
+function chunkForSlack(text, limit = CHUNK_TARGET) {
+  if (!text) return [""];
+  if (text.length <= limit) return [text];
+  const paras = text.split(/\n\n+/);
+  const chunks = [];
+  let cur = "";
+  const flush = () => { if (cur.trim()) { chunks.push(cur.trim()); cur = ""; } };
+  for (const p of paras) {
+    if (p.length > limit) {
+      flush();
+      for (let i = 0; i < p.length; i += limit) chunks.push(p.slice(i, i + limit));
+      continue;
+    }
+    if ((cur.length + 2 + p.length) > limit) flush();
+    cur += (cur ? "\n\n" : "") + p;
+  }
+  flush();
+  return chunks;
 }
 
 // One queue per thread so two rapid-fire messages in the same thread don't
@@ -88,21 +114,33 @@ app.message(async ({ message, client, logger }) => {
       };
 
       const finalReply = await ask(target, message.text, onProgress);
+      const chunks = chunkForSlack(finalReply || "_(empty reply)_");
+      const total = chunks.length;
+      const label = (i) => total > 1 ? `*(${i + 1}/${total})*\n` : "";
 
-      const finalText = clampForSlack(finalReply) || "_(empty reply)_";
+      // First chunk replaces the streaming placeholder.
       try {
         await client.chat.update({
           channel: message.channel,
           ts: placeholder.ts,
-          text: finalText,
+          text: label(0) + chunks[0],
         });
       } catch (e) {
-        logger.warn(`final chat.update failed (${e?.data?.error || e?.message}); falling back to a fresh thread reply`);
+        logger.warn(`final chat.update failed (${e?.data?.error || e?.message}); falling back to fresh thread reply`);
         await client.chat.postMessage({
           channel: message.channel,
           thread_ts: threadTs,
-          text: finalText,
+          text: label(0) + chunks[0],
         }).catch(() => {});
+      }
+
+      // Remaining chunks land as new replies in the same thread, in order.
+      for (let i = 1; i < total; i++) {
+        await client.chat.postMessage({
+          channel: message.channel,
+          thread_ts: threadTs,
+          text: label(i) + chunks[i],
+        }).catch((e) => logger.warn(`chunk ${i + 1}/${total} post failed: ${e?.data?.error || e?.message}`));
       }
     } catch (err) {
       logger.error(err);
