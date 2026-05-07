@@ -6,8 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=@TOOL_DIR@/listener
-ExecStart=/usr/bin/env node @TOOL_DIR@/listener/index.mjs
-EnvironmentFile=-/etc/profile.d/hzn-dev-env.sh
+# Source via bash instead of EnvironmentFile= — the env file is shared with
+# /etc/profile.d/ shells and uses `export KEY=value` lines. systemd's
+# EnvironmentFile parser silently drops lines that start with `export`, which
+# meant the listener saw none of the SLACK_* vars even though they were set.
+ExecStart=/bin/bash -c '. /etc/profile.d/hzn-dev-env.sh && exec /usr/bin/env node @TOOL_DIR@/listener/index.mjs'
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal
