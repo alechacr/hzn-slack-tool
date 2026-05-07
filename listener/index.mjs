@@ -22,6 +22,18 @@ const app = new App({
   logLevel: LogLevel.INFO,
 });
 
+// Slack chat.update accepts up to ~3000 chars in `text`. Anything longer fails
+// silently and leaves the message stuck on the last successful update. We
+// clamp to the last N chars (most recent state is what the user wants to see)
+// and prepend a marker so it's clear when truncation kicked in.
+const SLACK_TEXT_LIMIT = 2900;
+function clampForSlack(text) {
+  if (!text) return text;
+  if (text.length <= SLACK_TEXT_LIMIT) return text;
+  return `_(truncated to last ${SLACK_TEXT_LIMIT} chars; full reply was ${text.length} chars — \`tmux attach\` on the VM to read it all)_\n\n` +
+         text.slice(-SLACK_TEXT_LIMIT);
+}
+
 // One queue per thread so two rapid-fire messages in the same thread don't
 // race the same tmux session.
 const threadQueues = new Map();
@@ -70,7 +82,7 @@ app.message(async ({ message, client, logger }) => {
         client.chat.update({
           channel: message.channel,
           ts: placeholder.ts,
-          text: reply || ":thinking_face: …",
+          text: clampForSlack(reply) || ":thinking_face: …",
         }).catch(() => {});
       };
 
@@ -79,7 +91,7 @@ app.message(async ({ message, client, logger }) => {
       await client.chat.update({
         channel: message.channel,
         ts: placeholder.ts,
-        text: finalReply || "_(empty reply)_",
+        text: clampForSlack(finalReply) || "_(empty reply)_",
       });
     } catch (err) {
       logger.error(err);
