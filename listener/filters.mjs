@@ -24,9 +24,13 @@ export function isNoise(line) {
 // (everything between the user's line and the first divider/workdir/cost line
 // below it), or null if the anchor hasn't appeared yet.
 export function extractReply(lines, sentText) {
+  // Exact (trimmed) match — substring matching false-positives on the agent's
+  // own reply when the reply contains the user's word, e.g.
+  // user: "Hello"  →  agent: " Hello! What can I help you with?"
+  const target = sentText.trim();
   let anchor = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i].includes(sentText)) { anchor = i; break; }
+    if (lines[i].trim() === target) { anchor = i; break; }
   }
   if (anchor < 0) return null;
   const out = [];
