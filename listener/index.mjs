@@ -22,16 +22,17 @@ const app = new App({
   logLevel: LogLevel.INFO,
 });
 
-// Slack chat.update accepts up to ~3000 chars in `text`. Anything longer fails
-// silently and leaves the message stuck on the last successful update. We
-// clamp to the last N chars (most recent state is what the user wants to see)
-// and prepend a marker so it's clear when truncation kicked in.
+// Slack's chat.update text limit is 3000 chars. Past that it returns
+// msg_too_long. The clamp returns the trailing portion (most recent state
+// is what the user wants to see) with a header noting the truncation; the
+// header counts against the budget so the total stays under the limit.
 const SLACK_TEXT_LIMIT = 2900;
 function clampForSlack(text) {
   if (!text) return text;
   if (text.length <= SLACK_TEXT_LIMIT) return text;
-  return `_(truncated to last ${SLACK_TEXT_LIMIT} chars; full reply was ${text.length} chars — \`tmux attach\` on the VM to read it all)_\n\n` +
-         text.slice(-SLACK_TEXT_LIMIT);
+  const header = `_(truncated; full reply ${text.length} chars — \`tmux attach\` on the VM)_\n\n`;
+  const bodyRoom = SLACK_TEXT_LIMIT - header.length;
+  return header + text.slice(-bodyRoom);
 }
 
 // One queue per thread so two rapid-fire messages in the same thread don't
@@ -88,11 +89,21 @@ app.message(async ({ message, client, logger }) => {
 
       const finalReply = await ask(target, message.text, onProgress);
 
-      await client.chat.update({
-        channel: message.channel,
-        ts: placeholder.ts,
-        text: clampForSlack(finalReply) || "_(empty reply)_",
-      });
+      const finalText = clampForSlack(finalReply) || "_(empty reply)_";
+      try {
+        await client.chat.update({
+          channel: message.channel,
+          ts: placeholder.ts,
+          text: finalText,
+        });
+      } catch (e) {
+        logger.warn(`final chat.update failed (${e?.data?.error || e?.message}); falling back to a fresh thread reply`);
+        await client.chat.postMessage({
+          channel: message.channel,
+          thread_ts: threadTs,
+          text: finalText,
+        }).catch(() => {});
+      }
     } catch (err) {
       logger.error(err);
       await client.chat.postMessage({
