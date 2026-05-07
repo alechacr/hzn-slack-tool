@@ -38,10 +38,12 @@ export function kill(target) {
   return true;
 }
 
+// -e preserves ANSI escapes — extractReply uses them to detect italic-mode
+// thinking lines before stripping for display.
 function captureVisible(target) {
-  const r = tmux(["capture-pane", "-t", target, "-p"]);
+  const r = tmux(["capture-pane", "-t", target, "-p", "-e"]);
   if (r.status !== 0) return [];
-  return r.stdout.replace(/\n$/, "").split("\n").map(l => l.replace(/\s+$/, ""));
+  return r.stdout.replace(/\n$/, "").split("\n");
 }
 
 // Send `text` to the session and resolve when the reply settles (no change for
