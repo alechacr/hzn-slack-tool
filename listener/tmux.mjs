@@ -21,11 +21,17 @@ export function exists(target) {
 }
 
 // Idempotent: creates the session running pi if missing.
-export function ensureSession(target, { command = "pi", cwd } = {}) {
+//
+// Default command: `pi --thinking off`. Slack threads should show the answer,
+// not the model's chain-of-thought reasoning summary that gpt-5 / sonnet emit
+// by default. Override with PI_COMMAND env var when starting the listener if
+// you want a different default (e.g. `pi --thinking minimal`).
+export function ensureSession(target, { command, cwd } = {}) {
+  const cmd = command ?? process.env.PI_COMMAND ?? "pi --thinking off";
   if (exists(target)) return false;
   const args = ["new-session", "-d", "-s", target, "-x", String(PANE_W), "-y", String(PANE_H)];
   if (cwd) { args.push("-c", cwd); }
-  args.push(command);
+  args.push(cmd);
   const r = tmux(args);
   if (r.status !== 0) throw new Error(`new-session: ${r.stderr}`);
   tmux(["set-option", "-t", target, "history-limit", String(HISTORY_LIMIT)]);
