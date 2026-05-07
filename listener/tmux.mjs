@@ -55,19 +55,25 @@ export async function ask(target, text, onProgress = () => {}) {
   const r2 = tmux(["send-keys", "-t", target, "Enter"]);
   if (r2.status !== 0) throw new Error(`send-keys enter: ${r2.stderr}`);
 
+  // Three states matter:
+  //   reply === null         — anchor not found yet (send-keys hasn't echoed,
+  //                            or anchor scrolled out of the visible pane).
+  //   reply === ""           — anchor visible but only spinner/dividers below.
+  //                            Pi is "Working..."; not idle, keep waiting.
+  //   reply.length > 0       — actual content. Idle counter applies here.
   let last = "";
-  let lastChange = Date.now();
+  let lastChange = 0;          // 0 until we observe non-empty content
   const startedAt = Date.now();
   while (true) {
     await new Promise(r => setTimeout(r, POLL_MS));
     const lines = captureVisible(target);
     const reply = extractReply(lines, text);
-    if (reply !== null && reply !== last) {
+    if (reply && reply !== last) {
       last = reply;
       lastChange = Date.now();
       try { onProgress(reply); } catch { /* don't let UI errors break the poll */ }
     }
-    if (reply !== null && Date.now() - lastChange >= IDLE_MS) return last;
+    if (last.length > 0 && Date.now() - lastChange >= IDLE_MS) return last;
     if (Date.now() - startedAt > TURN_TIMEOUT_MS) {
       throw new Error(`turn timed out after ${TURN_TIMEOUT_MS / 1000}s`);
     }
