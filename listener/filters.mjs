@@ -11,6 +11,13 @@ export const ITALIC_SGR_RE = /\x1B\[(?:\d+;)*3(?:;\d+)*m/;
 
 // Braille spinner glyphs followed by pi's status verbs.
 const SPINNER_RE = /[⠀-⣿]\s+(Working|Thinking|Loading|Generating|Streaming)/i;
+
+// "Is pi currently busy?" — used to extend the idle deadline across multi-step
+// tool-use cycles (model -> tool -> model -> tool -> ...). Without this check
+// the listener returns prematurely when pi is between tool calls.
+export function hasSpinner(rawLines) {
+  return rawLines.some(l => SPINNER_RE.test(stripAnsi(l)));
+}
 const COST_RE = /\$\d+(?:\.\d+)?\s*\(sub\)/;
 const DIVIDER_RE = /^[\s─━═-]+$/;
 const WORKDIR_RE = /^~?\/[^\s]/;

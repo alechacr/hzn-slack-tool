@@ -1,14 +1,14 @@
 // Thin wrapper over tmux. All session lifecycle + I/O.
 
 import { spawnSync } from "node:child_process";
-import { extractReply } from "./filters.mjs";
+import { extractReply, hasSpinner } from "./filters.mjs";
 
 const HISTORY_LIMIT = 8000;
 const PANE_W = 220;
 const PANE_H = 50;
 const POLL_MS = 400;
 const IDLE_MS = 1500;
-const TURN_TIMEOUT_MS = 180_000;
+const TURN_TIMEOUT_MS = 300_000;  // 5 min — multi-step /investigate flows can be long
 
 function tmux(args) {
   const r = spawnSync("tmux", args, { encoding: "utf8" });
@@ -57,25 +57,35 @@ export async function ask(target, text, onProgress = () => {}) {
   const r2 = tmux(["send-keys", "-t", target, "Enter"]);
   if (r2.status !== 0) throw new Error(`send-keys enter: ${r2.stderr}`);
 
-  // Three states matter:
-  //   reply === null         — anchor not found yet (send-keys hasn't echoed,
-  //                            or anchor scrolled out of the visible pane).
-  //   reply === ""           — anchor visible but only spinner/dividers below.
-  //                            Pi is "Working..."; not idle, keep waiting.
-  //   reply.length > 0       — actual content. Idle counter applies here.
+  // Idle detection has to handle pi's multi-step tool-use flow:
+  //   user -> [Working...] -> partial answer -> [Working...] -> tool call ->
+  //   tool result -> [Working...] -> more answer -> ... -> final answer.
+  // Returning on the first 1.5s of "no new content" cuts off mid-flow when
+  // pi is between the model and the next tool. We extend the deadline as
+  // long as the spinner is still visible somewhere in the pane.
   let last = "";
-  let lastChange = 0;          // 0 until we observe non-empty content
+  let lastChange = 0;        // 0 until we observe non-empty content
+  let lastWorkingAt = 0;     // last time we saw the spinner
   const startedAt = Date.now();
   while (true) {
     await new Promise(r => setTimeout(r, POLL_MS));
     const lines = captureVisible(target);
     const reply = extractReply(lines, text);
+    const working = hasSpinner(lines);
+
+    if (working) lastWorkingAt = Date.now();
     if (reply && reply !== last) {
       last = reply;
       lastChange = Date.now();
       try { onProgress(reply); } catch { /* don't let UI errors break the poll */ }
     }
-    if (last.length > 0 && Date.now() - lastChange >= IDLE_MS) return last;
+
+    // Idle = have content, not currently working, and quiet for IDLE_MS since
+    // both the last content change AND the last spinner observation.
+    const quietSince = Math.max(lastChange, lastWorkingAt);
+    if (last.length > 0 && !working && Date.now() - quietSince >= IDLE_MS) {
+      return last;
+    }
     if (Date.now() - startedAt > TURN_TIMEOUT_MS) {
       throw new Error(`turn timed out after ${TURN_TIMEOUT_MS / 1000}s`);
     }
