@@ -7,6 +7,7 @@
 import bolt from "@slack/bolt";
 import { ensureSession, ask } from "./tmux.mjs";
 import { sessionKey, tmuxTarget, load, save } from "./sessions.mjs";
+import { downloadSlackFiles } from "./attachments.mjs";
 
 const { App, LogLevel } = bolt;
 
@@ -79,10 +80,15 @@ function enqueue(key, fn) {
 
 app.message(async ({ message, client, logger }) => {
   // Filter: only the configured channel; skip bot messages, edits, joins, etc.
+  // file_share is the only subtype we keep — that's what comes in when the
+  // user uploads an attachment (sometimes alongside text).
   if (message.channel !== SLACK_CHANNEL_ID) return;
-  if (message.subtype) return;
+  if (message.subtype && message.subtype !== "file_share") return;
   if (message.bot_id) return;
-  if (!message.text || message.text.trim() === "") return;
+
+  const text = (message.text ?? "").trim();
+  const files = message.files ?? [];
+  if (!text && files.length === 0) return;
 
   const threadTs = message.thread_ts ?? message.ts;
   const key = sessionKey(message.channel, threadTs);
@@ -95,6 +101,28 @@ app.message(async ({ message, client, logger }) => {
         save(key, { channel: message.channel, threadTs, target, createdAt: Date.now() });
         // Pi takes a moment to boot before send-keys lands cleanly.
         await new Promise(r => setTimeout(r, 2500));
+      }
+
+      // Pull any attachments down to a per-thread temp dir; pi reads them
+      // inline via @path references the same way it does at CLI invocation.
+      const downloads = await downloadSlackFiles(files, key, SLACK_BOT_TOKEN);
+      const filePaths = downloads.filter(d => d.path).map(d => `@${d.path}`);
+      const skipNotes = downloads.filter(d => d.skipped)
+                                 .map(d => `[skipped ${d.name}: ${d.reason}]`);
+      // Composed prompt: @paths first, then user text, then any skip notes
+      // so pi sees what got dropped. Empty user text + at least one file
+      // is fine — pi will infer intent from the file alone.
+      const composed = [...filePaths, text, ...skipNotes].filter(Boolean).join(" ");
+      if (!composed) {
+        await client.chat.postMessage({
+          channel: message.channel,
+          thread_ts: threadTs,
+          text: ":warning: nothing to forward (no usable files and no text)",
+        }).catch(() => {});
+        return;
+      }
+      if (filePaths.length > 0) {
+        logger.info(`forwarded ${filePaths.length} attachment(s) to ${target}`);
       }
 
       // Post a placeholder we'll edit as the reply streams in.
@@ -117,7 +145,7 @@ app.message(async ({ message, client, logger }) => {
         }).catch(() => {});
       };
 
-      const finalReply = await ask(target, message.text, onProgress);
+      const finalReply = await ask(target, composed, onProgress);
       const chunks = chunkForSlack(finalReply || "_(empty reply)_");
       const total = chunks.length;
       const label = (i) => total > 1 ? `*(${i + 1}/${total})*\n` : "";
