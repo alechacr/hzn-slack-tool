@@ -13,7 +13,11 @@ const { App, LogLevel } = bolt;
 const SLACK_BOT_TOKEN = required("SLACK_BOT_TOKEN");
 const SLACK_APP_TOKEN = required("SLACK_APP_TOKEN");
 const SLACK_CHANNEL_ID = required("SLACK_CHANNEL_ID");
-const PI_CWD = process.env.PI_CWD || process.env.HOME;
+// Default to ~/repos (the hzn-hub super-root) so pi discovers skills installed
+// per the TOOLS.md contract at $PI_SUPER_ROOT/.pi/agent/skills/<name>/. Running
+// from $HOME would find user-global skills (ohara-*) but miss super-root ones
+// (freddy, hzn-agent). Override with PI_CWD if a non-hzn-hub layout is needed.
+const PI_CWD = process.env.PI_CWD || `${process.env.HOME}/repos`;
 
 const app = new App({
   token: SLACK_BOT_TOKEN,
